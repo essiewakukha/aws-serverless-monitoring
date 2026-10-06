@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  The checker: a Lambda function run every minute by an EventBridge rule.
+  Deployed with `aws cloudformation package` (scripts/deploy.sh does this),
+  which uploads ../lambda/checker to S3 and rewrites the Code property.
+
+Parameters:
+  TargetsTableName:
+    Type: String
+  TargetsTableArn:
+    Type: String
+  ResultsTableName:
+    Type: String
+  ResultsTableArn:
+    Type: String
+  AlertTopicArn:
+    Type: String
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 minute)
+  FailureThreshold:
+    Type: Number
+    Default: 2
+    Description: Consecutive failed checks before a DOWN alert is sent
+
+Resources:
+  CheckerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/serverless-monitor-checker
+      RetentionInDays: 14
+
+  CheckerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: checker-least-privilege
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:UpdateItem
+                Resource: !Ref TargetsTableArn
+              - Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !Ref ResultsTableArn
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: ServerlessMonitor
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlertTopicArn
+
+  CheckerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CheckerLogGroup
+    Properties:
+      FunctionName: serverless-monitor-checker
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Role: !GetAtt CheckerRole.Arn
+      Timeout: 50
+      MemorySize: 256
+      TracingConfig:
+        Mode: Active
+      Code: ../lambda/checker
+      Environment:
+        Variables:
+          TARGETS_TABLE: !Ref TargetsTableName
+          RESULTS_TABLE: !Ref ResultsTableName
+          ALERT_TOPIC_ARN: !Ref AlertTopicArn
+          METRIC_NAMESPACE: ServerlessMonitor
+          FAILURE_THRESHOLD: !Ref FailureThreshold
+
+  ScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: serverless-monitor-schedule
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Id: checker
+          Arn: !GetAtt CheckerFunction.Arn
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CheckerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduleRule.Arn
+
+Outputs:
+  CheckerFunctionName:
+    Value: !Ref CheckerFunction
