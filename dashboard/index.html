@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service status</title>
+<style>
+  :root {
+    --bg: #f6f6f3; --card: #ffffff; --text: #1b1b19; --muted: #6a6a64;
+    --line: #e3e3dd; --up: #1a7f4b; --down: #c0392b; --unknown: #a0a09a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --card: #1e1e1c; --text: #ecece7; --muted: #9a9a93;
+      --line: #32322e; --up: #3ecf8e; --down: #ff6b5e; --unknown: #6f6f69;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 16px; }
+  .banner { padding: 14px 16px; border-radius: 10px; margin-bottom: 24px;
+            border: 1px solid var(--line); background: var(--card); font-weight: 600; }
+  .banner.ok { border-left: 6px solid var(--up); }
+  .banner.bad { border-left: 6px solid var(--down); }
+  .banner.warn { border-left: 6px solid var(--unknown); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-bottom: 12px; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .name { font-weight: 600; }
+  .pill { font-size: 0.8rem; font-weight: 700; padding: 2px 10px; border-radius: 999px; color: #fff; }
+  .pill.UP { background: var(--up); } .pill.DOWN { background: var(--down); }
+  .pill.UNKNOWN { background: var(--unknown); }
+  .meta { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+  .bars { display: flex; gap: 2px; height: 28px; margin-top: 12px; align-items: stretch; }
+  .bars span { flex: 1; border-radius: 2px; min-width: 2px; }
+  .bars .up { background: var(--up); } .bars .down { background: var(--down); }
+  footer { color: var(--muted); font-size: 0.8rem; margin-top: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Service status</h1>
+  <div id="banner" class="banner warn">Loading...</div>
+  <div id="targets"></div>
+  <footer id="footer"></footer>
+</main>
+<script src="config.js"></script>
+<script>
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;   // textContent only: names come from a database
+    return e;
+  };
+  const ago = (ts) => {
+    if (!ts) return "never";
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (s < 60) return s + "s ago";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    return Math.floor(s / 3600) + "h ago";
+  };
+
+  function renderTarget(t) {
+    const card = el("div", "card");
+    const row = el("div", "row");
+    row.append(el("span", "name", t.name), el("span", "pill " + t.status, t.status));
+    card.append(row);
+
+    const uptime = t.uptime_pct === null ? "no data" : t.uptime_pct + "% uptime (last " + t.history.length + " checks)";
+    card.append(el("div", "meta", t.latency_ms + " ms | " + uptime + " | checked " + ago(t.last_checked)));
+
+    const bars = el("div", "bars");
+    bars.setAttribute("role", "img");
+    bars.setAttribute("aria-label", "Recent check history for " + t.name);
+    t.history.forEach((h) => bars.append(el("span", h.up ? "up" : "down")));
+    card.append(bars);
+    return card;
+  }
+
+  async function load() {
+    const banner = document.getElementById("banner");
+    const root = document.getElementById("targets");
+    try {
+      if (!window.MONITOR_API_URL) throw new Error("config.js missing");
+      const res = await fetch(window.MONITOR_API_URL, { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+
+      banner.className = "banner " + (data.all_up ? "ok" : "bad");
+      banner.textContent = data.targets.length === 0 ? "No targets configured"
+        : data.all_up ? "All systems operational" : "Some systems are down";
+      root.replaceChildren(...data.targets.map(renderTarget));
+      document.getElementById("footer").textContent = "Updated " + new Date().toLocaleTimeString() + " | refreshes every 30s";
+    } catch (e) {
+      banner.className = "banner warn";
+      banner.textContent = "Could not load status (" + e.message + ")";
+    }
+  }
+  load();
+  setInterval(load, 30000);
+</script>
+</body>
+</html>
