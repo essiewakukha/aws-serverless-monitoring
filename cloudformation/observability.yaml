@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Observability for the monitor itself: an alarm on checker errors, a
+  CloudWatch dashboard, and saved Logs Insights queries. Deploy after checker.yaml.
+
+Parameters:
+  CheckerFunctionName:
+    Type: String
+  AlertTopicArn:
+    Type: String
+
+Resources:
+  CheckerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: monitor-checker-errors
+      AlarmDescription: The checker Lambda threw an unhandled error
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CheckerFunctionName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+      OKActions: [!Ref AlertTopicArn]
+
+  MonitorDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: serverless-monitor
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Targets down",
+                "metrics": [["ServerlessMonitor", "TargetsDown"]],
+                "stat": "Maximum", "period": 60, "region": "${AWS::Region}", "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Slowest healthy target (ms)",
+                "metrics": [["ServerlessMonitor", "SlowestLatencyMs"]],
+                "stat": "Maximum", "period": 60, "region": "${AWS::Region}", "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Checker heartbeat (runs per 5 min)",
+                "metrics": [["ServerlessMonitor", "Heartbeat"]],
+                "stat": "Sum", "period": 300, "region": "${AWS::Region}", "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Checker Lambda duration (p95) and errors",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${CheckerFunctionName}", {"stat": "p95"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${CheckerFunctionName}", {"stat": "Sum", "yAxis": "right"}]
+                ],
+                "period": 300, "region": "${AWS::Region}", "view": "timeSeries"
+              }
+            }
+          ]
+        }
+
+  FailedChecksQuery:
+    Type: AWS::Logs::QueryDefinition
+    Properties:
+      Name: serverless-monitor/failed-checks
+      LogGroupNames:
+        - !Sub '/aws/lambda/${CheckerFunctionName}'
+      QueryString: |
+        fields @timestamp, target_id, status_code, latency_ms, error
+        | filter event = "check_failed"
+        | sort @timestamp desc
+        | limit 50
+
+  LatencyByTargetQuery:
+    Type: AWS::Logs::QueryDefinition
+    Properties:
+      Name: serverless-monitor/latency-by-target
+      LogGroupNames:
+        - !Sub '/aws/lambda/${CheckerFunctionName}'
+      QueryString: |
+        filter event = "check_ok"
+        | stats avg(latency_ms) as avg_ms, pct(latency_ms, 95) as p95_ms, max(latency_ms) as max_ms, count(*) as checks by target_id
+        | sort p95_ms desc
+
+Outputs:
+  DashboardUrl:
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=serverless-monitor'
