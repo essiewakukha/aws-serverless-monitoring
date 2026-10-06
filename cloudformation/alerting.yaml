@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  SNS topic plus CloudWatch alarms on the custom metrics the checker publishes.
+  Deploy after storage.yaml and before checker.yaml (the checker needs the
+  topic ARN to send per-target DOWN/RECOVERED messages).
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address that receives alerts (confirm the SNS subscription email)
+  Namespace:
+    Type: String
+    Default: ServerlessMonitor
+  LatencyThresholdMs:
+    Type: Number
+    Default: 3000
+
+Resources:
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: serverless-monitor-alerts
+      DisplayName: Serverless Monitor Alerts
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  TargetsDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: monitor-targets-down
+      AlarmDescription: At least one monitored target has been failing for 2 of the last 3 minutes
+      Namespace: !Ref Namespace
+      MetricName: TargetsDown
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  HighLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: monitor-high-latency
+      AlarmDescription: Slowest healthy target exceeded the latency threshold for 3 of the last 5 minutes
+      Namespace: !Ref Namespace
+      MetricName: SlowestLatencyMs
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: !Ref LatencyThresholdMs
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  HeartbeatAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: monitor-checker-heartbeat-missing
+      AlarmDescription: The checker has stopped running. The monitor itself is down, so nothing is being checked.
+      Namespace: !Ref Namespace
+      MetricName: Heartbeat
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+Outputs:
+  AlertTopicArn:
+    Value: !Ref AlertTopic
