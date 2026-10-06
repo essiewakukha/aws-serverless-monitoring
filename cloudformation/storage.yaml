@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  DynamoDB tables for the serverless monitor: the list of targets to check,
+  and the history of check results (auto-expired by TTL). Deploy first.
+
+Resources:
+  TargetsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: monitor-targets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: target_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: target_id
+          KeyType: HASH
+
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: monitor-check-results
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: target_id
+          AttributeType: S
+        - AttributeName: checked_at
+          AttributeType: N
+      KeySchema:
+        - AttributeName: target_id
+          KeyType: HASH
+        - AttributeName: checked_at
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+Outputs:
+  TargetsTableName:
+    Value: !Ref TargetsTable
+  TargetsTableArn:
+    Value: !GetAtt TargetsTable.Arn
+  ResultsTableName:
+    Value: !Ref ResultsTable
+  ResultsTableArn:
+    Value: !GetAtt ResultsTable.Arn
